@@ -1,0 +1,30 @@
+# .gitignore
+
+# Бинарные файлы
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+sfpipeline
+
+# Папки
+vendor/
+tmp/
+dist/
+
+# Файлы IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Файлы операционных систем
+.DS_Store
+Thumbs.db
+
+# Лог файлы
+*.log
+
+# Коэффициенты покрытия тестами
+*.out
