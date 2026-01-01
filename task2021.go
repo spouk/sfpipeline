@@ -1,20 +1,10 @@
-//Напишите код, реализующий пайплайн, работающий с целыми числами и состоящий из следующих стадий:
-//
-//Стадия фильтрации отрицательных чисел (не пропускать отрицательные числа).
-//Стадия фильтрации чисел, не кратных 3 (не пропускать такие числа), исключая также и 0.
-//Стадия буферизации данных в кольцевом буфере с интерфейсом, соответствующим тому, который был дан в качестве задания в 19 модуле. В этой стадии предусмотреть опустошение буфера (и соответственно, передачу этих данных, если они есть, дальше) с определённым интервалом во времени. Значения размера буфера и этого интервала времени сделать настраиваемыми (как мы делали: через константы или глобальные переменные).
-//Написать источник данных для конвейера. Непосредственным источником данных должна быть консоль.
-//
-//Также написать код потребителя данных конвейера. Данные от конвейера можно направить снова в консоль построчно, сопроводив их каким-нибудь поясняющим текстом, например: «Получены данные …».
-//
-//При написании источника данных подумайте о фильтрации нечисловых данных, которые можно ввести через консоль. Как и где их фильтровать, решайте сами.
-
 package main
 
 import (
 	"bufio"
 	"container/ring"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -26,7 +16,21 @@ const (
 	CLEAR_INTERVAL = 30 * time.Second
 )
 
-// --  ring buffer
+var logger *log.Logger
+
+func init() {
+	logger = log.New(os.Stdout, "", log.Ldate|log.Ltime)
+}
+
+func logInfo(msg string, args ...interface{}) {
+	logger.Printf("[INFO] "+msg, args...)
+}
+
+func logError(msg string, args ...interface{}) {
+	logger.Printf("[ERROR] "+msg, args...)
+}
+
+// -- ring buffer
 type RingBuffer struct {
 	buffer *ring.Ring
 	start  *ring.Ring
@@ -39,7 +43,7 @@ func NewRingBuffer(size int) *RingBuffer {
 	r := ring.New(size)
 	return &RingBuffer{
 		buffer: r,
-		start:  r, // Запоминаем начало
+		start:  r,
 		size:   size,
 		count:  0,
 	}
@@ -53,13 +57,14 @@ func (rb *RingBuffer) Push(value int) {
 	if rb.count < rb.size {
 		rb.count++
 	}
+	logInfo("Добавлено в буфер: %d (всего: %d)", value, rb.count)
 }
 
 // получение значения с кольцевого буфера
 func (rb *RingBuffer) GetValues() []int {
 	var values []int
-	// проверка на наличие "чегонить" в буфере
 	if rb.count == 0 {
+		logInfo("Буфер пуст")
 		return values
 	}
 
@@ -68,69 +73,81 @@ func (rb *RingBuffer) GetValues() []int {
 		values = append(values, current.Value.(int))
 		current = current.Next()
 	}
+	logInfo("Получено значений из буфера: %d", len(values))
 	return values
 }
 
 // очистка кольцевого буфера
 func (rb *RingBuffer) Clear() {
-	// Создаем новое пустое кольцо
 	newRing := ring.New(rb.size)
-
-	// Сбрасываем все указатели
 	rb.buffer = newRing
 	rb.start = newRing
 	rb.count = 0
-
-	fmt.Println("Буфер очищен")
+	logInfo("Буфер очищен")
 }
 
 // -- pipeline
 
-// (1) -  фильтр отрицательных чисел
+// (1) - фильтр отрицательных чисел
 func filterNegative(input <-chan int) <-chan int {
 	output := make(chan int)
 
 	go func() {
+		logInfo("Запуск фильтра отрицательных чисел")
+		defer func() {
+			close(output)
+			logInfo("Завершение фильтра отрицательных чисел")
+		}()
+
 		for num := range input {
 			if num >= 0 {
+				logInfo("Фильтр отрицательных: пропущено %d", num)
 				output <- num
 			} else {
-				fmt.Printf("[f1] Отброшено отрицательное число: %d\n", num)
+				logInfo("Фильтр отрицательных: отброшено %d", num)
 			}
 		}
-		close(output)
 	}()
 
 	return output
 }
 
-// (2) -  фильтр чисел, не кратных 3 (исключая 0)
+// (2) - фильтр чисел, не кратных 3 (исключая 0)
 func filterMultipleOf3(input <-chan int) <-chan int {
 	output := make(chan int)
 
 	go func() {
+		logInfo("Запуск фильтра чисел, не кратных 3")
+		defer func() {
+			close(output)
+			logInfo("Завершение фильтра чисел, не кратных 3")
+		}()
+
 		for num := range input {
 			if num != 0 && num%3 == 0 {
+				logInfo("Фильтр кратных 3: пропущено %d", num)
 				output <- num
 			} else {
-				fmt.Printf("[f2] Отброшено (не кратно 3 или 0): %d\n", num)
+				logInfo("Фильтр кратных 3: отброшено %d", num)
 			}
 		}
-		close(output)
 	}()
 
 	return output
 }
 
-// (3) -  буферизация с периодической очисткой
+// (3) - буферизация с периодической очисткой
 func bufferStage(input <-chan int) <-chan int {
 	output := make(chan int)
 	buffer := NewRingBuffer(BUFFER_SIZE)
 
 	go func() {
-		defer close(output)
+		logInfo("Запуск стадии буферизации")
+		defer func() {
+			close(output)
+			logInfo("Завершение стадии буферизации")
+		}()
 
-		// Таймер для периодической очистки
 		ticker := time.NewTicker(CLEAR_INTERVAL)
 		defer ticker.Stop()
 
@@ -138,9 +155,9 @@ func bufferStage(input <-chan int) <-chan int {
 			select {
 			case num, ok := <-input:
 				if !ok {
-					// Входной канал закрыт, выводим остатки
+					logInfo("Входной канал закрыт")
 					if vals := buffer.GetValues(); len(vals) > 0 {
-						fmt.Println("\n[Завершение] Вывод остатков из буфера:")
+						logInfo("Вывод остатков из буфера: %d значений", len(vals))
 						for _, v := range vals {
 							output <- v
 						}
@@ -148,13 +165,10 @@ func bufferStage(input <-chan int) <-chan int {
 					return
 				}
 
-				// Добавляем в буфер
 				buffer.Push(num)
-				fmt.Printf("[Буфер] Добавлено: %d\n", num)
 
-				// Проверяем, не заполнен ли буфер
 				if vals := buffer.GetValues(); len(vals) == BUFFER_SIZE {
-					fmt.Println("\n[Буфер полон] Вывод данных:")
+					logInfo("Буфер полон, вывод данных")
 					for _, v := range vals {
 						output <- v
 					}
@@ -162,9 +176,9 @@ func bufferStage(input <-chan int) <-chan int {
 				}
 
 			case <-ticker.C:
-				// Время очистить буфер
+				logInfo("Таймер: автоматическая очистка буфера")
 				if vals := buffer.GetValues(); len(vals) > 0 {
-					fmt.Println("\n[Таймер] Автоматическая очистка буфера:")
+					logInfo("Таймер: вывод %d значений", len(vals))
 					for _, v := range vals {
 						output <- v
 					}
@@ -182,7 +196,11 @@ func consoleSource() <-chan int {
 	input := make(chan int)
 
 	go func() {
-		defer close(input)
+		logInfo("Запуск источника данных (консоль)")
+		defer func() {
+			close(input)
+			logInfo("Завершение источника данных")
+		}()
 
 		scanner := bufio.NewScanner(os.Stdin)
 
@@ -191,6 +209,7 @@ func consoleSource() <-chan int {
 		for {
 			fmt.Print("> ")
 			if !scanner.Scan() {
+				logError("Ошибка чтения из консоли")
 				break
 			}
 
@@ -198,20 +217,21 @@ func consoleSource() <-chan int {
 
 			// Проверка на выход
 			if strings.ToLower(text) == "exit" {
-				fmt.Println("Завершение ввода...")
+				logInfo("Получена команда выхода")
 				return
 			}
 
 			// Фильтрация нечисловых данных
 			num, err := strconv.Atoi(text)
 			if err != nil {
+				logInfo("Нечисловой ввод: %s", text)
 				fmt.Println("Ошибка! Пожалуйста, введите целое число")
 				continue
 			}
 
 			// Отправляем число в канал
 			input <- num
-			fmt.Printf("Отправлено в пайплайн: %d\n", num)
+			logInfo("Отправлено в пайплайн: %d", num)
 		}
 	}()
 
@@ -220,14 +240,17 @@ func consoleSource() <-chan int {
 
 // -- consumer
 func dataConsumer(output <-chan int) {
+	logInfo("Запуск потребителя данных")
 	for num := range output {
+		logInfo("Потребитель получил: %d", num)
 		fmt.Printf(">>> Получены данные: %d\n", num)
 	}
-	fmt.Println("Пайплайн завершил работу!")
+	logInfo("Потребитель завершил работу")
 }
 
 // - main point
 func main() {
+	logInfo("=== ЗАПУСК ПАЙПЛАЙНА ===")
 	fmt.Println("=== ПАЙПЛАЙН ОБРАБОТКИ ЧИСЕЛ ===")
 	fmt.Printf("Настройки: размер буфера=%d, интервал очистки=%v\n",
 		BUFFER_SIZE, CLEAR_INTERVAL)
@@ -241,12 +264,13 @@ func main() {
 	source := consoleSource()
 
 	// Строим пайплайн
-	stage1 := filterNegative(source)    // Фильтр 1
-	stage2 := filterMultipleOf3(stage1) // Фильтр 2
-	stage3 := bufferStage(stage2)       // Буферизация
+	stage1 := filterNegative(source)
+	stage2 := filterMultipleOf3(stage1)
+	stage3 := bufferStage(stage2)
 
 	// Запускаем потребителя
 	dataConsumer(stage3)
 
+	logInfo("=== ПРОГРАММА ЗАВЕРШЕНА ===")
 	fmt.Println("Программа завершена!")
 }
